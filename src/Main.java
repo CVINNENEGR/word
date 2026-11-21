@@ -6,48 +6,45 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Command-line entry point and UTF-8 exports for assignment 5, Words. */
+/** Точка входа и экспорт результатов в TXT/JSON/HTML/PNG. */
 public final class Main {
     private record Options(int rows, int cols, long seed, Path words, Path output) {}
 
     public static void main(String[] args) {
         try {
-            for (String arg : args) {
-                if (arg.equals("--help") || arg.equals("-h")) {
-                    help();
-                    return;
-                }
-            }
-            Options options = parseOptions(args);
-            List<String> words = readWords(options.words());
-            WordSearchGenerator.Puzzle puzzle = WordSearchGenerator.generate(
-                    options.rows(), options.cols(), words, options.seed());
-            WordSearchGenerator.validate(puzzle);
+            Options options = razobrat_argumenty(args);
+            if (options == null) return; // --help уже напечатан
+            List<String> words = prochitat_slova(options.words());
+            WordSearchGenerator.Puzzle puzzle = WordSearchGenerator.glavniy_algoritm(
+                options.rows(), options.cols(), words, options.seed());
+            WordSearchGenerator.proverka_correctnosti(puzzle);
 
             Files.createDirectories(options.output());
-            String text = toText(puzzle);
-            String json = toJson(puzzle);
+            String text = v_forme_texta(puzzle);
+            String json = v_forme_json(puzzle);
             Files.writeString(options.output().resolve("puzzle.txt"), text, StandardCharsets.UTF_8);
             Files.writeString(options.output().resolve("puzzle.json"), json, StandardCharsets.UTF_8);
-            Files.writeString(options.output().resolve("puzzle.html"), toHtml(puzzle, json), StandardCharsets.UTF_8);
+            Files.writeString(options.output().resolve("puzzle.html"), v_forme_html(puzzle, json), StandardCharsets.UTF_8);
             PuzzleRenderer.writeImages(puzzle, options.output());
+
             System.out.print(text);
             System.out.println("Файлы сохранены в: " + options.output().toAbsolutePath().normalize());
             System.out.println("Откройте puzzle.html, чтобы показать или скрыть решение.");
-        } catch (IllegalArgumentException | IllegalStateException | IOException exception) {
-            System.err.println("Ошибка: " + exception.getMessage());
+        } catch (IllegalArgumentException | IllegalStateException | IOException e) {
+            System.err.println("Ошибка: " + e.getMessage());
             System.exit(1);
         }
     }
 
-    private static Options parseOptions(String[] args) {
-        int rows = 10;
-        int cols = 10;
+    /** Разбор флагов; возвращает null, если запрошена справка. */
+    private static Options razobrat_argumenty(String[] args) {
+        int rows = 10, cols = 10;
         long seed = 42;
         Path words = Path.of("words.txt");
         Path output = Path.of("output");
         for (int i = 0; i < args.length; i++) {
             String flag = args[i];
+            if (flag.equals("--help") || flag.equals("-h")) { pechatat_spravku(); return null; }
             if (!List.of("--size", "--seed", "--words", "--out").contains(flag)) {
                 throw new IllegalArgumentException("Неизвестный параметр: " + flag + ". Справка: --help");
             }
@@ -57,19 +54,12 @@ public final class Main {
                 case "--size" -> {
                     String[] parts = value.toLowerCase(Locale.ROOT).replace('х', 'x').replace('×', 'x').split("x", -1);
                     if (parts.length != 2) throw new IllegalArgumentException("Размер задаётся как строки x столбцы, например 10x12.");
-                    try {
-                        rows = Integer.parseInt(parts[0]);
-                        cols = Integer.parseInt(parts[1]);
-                    } catch (NumberFormatException exception) {
-                        throw new IllegalArgumentException("Размер должен содержать два целых числа, например 10x12.");
-                    }
+                    try { rows = Integer.parseInt(parts[0]); cols = Integer.parseInt(parts[1]); }
+                    catch (NumberFormatException e) { throw new IllegalArgumentException("Размер должен содержать два целых числа, например 10x12."); }
                 }
                 case "--seed" -> {
-                    try {
-                        seed = Long.parseLong(value);
-                    } catch (NumberFormatException exception) {
-                        throw new IllegalArgumentException("Seed должен быть целым числом типа long.");
-                    }
+                    try { seed = Long.parseLong(value); }
+                    catch (NumberFormatException e) { throw new IllegalArgumentException("Seed должен быть целым числом типа long."); }
                 }
                 case "--words" -> words = Path.of(value);
                 case "--out" -> output = Path.of(value);
@@ -79,7 +69,7 @@ public final class Main {
         return new Options(rows, cols, seed, words, output);
     }
 
-    private static List<String> readWords(Path path) throws IOException {
+    private static List<String> prochitat_slova(Path path) throws IOException {
         List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
         List<String> words = new ArrayList<>();
         for (int i = 0; i < lines.size(); i++) {
@@ -91,7 +81,7 @@ public final class Main {
         return words;
     }
 
-    private static void help() {
+    private static void pechatat_spravku() {
         System.out.println("""
                 Words — вариант 5. Генератор поиска слов в буквенной сетке.
 
@@ -106,67 +96,64 @@ public final class Main {
                 """);
     }
 
-    private static String toText(WordSearchGenerator.Puzzle puzzle) {
+    private static String v_forme_texta(WordSearchGenerator.Puzzle puzzle) {
         char[][] grid = puzzle.grid();
         StringBuilder out = new StringBuilder();
         out.append("WORDS — ВАРИАНТ 5\n")
-                .append("Размер: ").append(grid.length).append(" x ").append(grid[0].length)
-                .append(" (строки x столбцы)\n")
-                .append("Seed: ").append(puzzle.seed()).append('\n')
-                .append("Размещено слов: ").append(puzzle.placements().size()).append("\n\n");
+            .append("Размер: ").append(grid.length).append(" x ").append(grid[0].length)
+            .append(" (строки x столбцы)\n")
+            .append("Seed: ").append(puzzle.seed()).append('\n')
+            .append("Размещено слов: ").append(puzzle.placements().size()).append("\n\n");
         for (char[] row : grid) {
-            for (int col = 0; col < row.length; col++) {
-                if (col > 0) out.append(' ');
-                out.append(row[col]);
-            }
+            for (int col = 0; col < row.length; col++) { if (col > 0) out.append(' '); out.append(row[col]); }
             out.append('\n');
         }
         out.append("\nРЕШЕНИЕ (строка, столбец; нумерация с 1)\n");
         for (WordSearchGenerator.Placement word : puzzle.placements()) {
             int last = word.word().length() - 1;
             out.append(String.format(Locale.ROOT, "%s: (%d, %d) -> (%d, %d), %s%n",
-                    word.word(), word.row() + 1, word.col() + 1,
-                    word.row() + word.dr() * last + 1, word.col() + word.dc() * last + 1,
-                    direction(word.dr(), word.dc())));
+                word.word(), word.row() + 1, word.col() + 1,
+                word.row() + word.dr() * last + 1, word.col() + word.dc() * last + 1,
+                nazvanie_napravleniya(word.dr(), word.dc())));
         }
         out.append("\nПроверка: каждое слово встречается ровно один раз.\n");
         return out.toString();
     }
 
-    private static String direction(int dr, int dc) {
+    private static String nazvanie_napravleniya(int dr, int dc) {
         if (dr == 0) return dc > 0 ? "вправо" : "влево";
         if (dc == 0) return dr > 0 ? "вниз" : "вверх";
         return (dr > 0 ? "вниз" : "вверх") + (dc > 0 ? "-вправо" : "-влево");
     }
 
-    private static String toJson(WordSearchGenerator.Puzzle puzzle) {
+    private static String v_forme_json(WordSearchGenerator.Puzzle puzzle) {
         char[][] grid = puzzle.grid();
         StringBuilder out = new StringBuilder();
         out.append("{\n  \"rows\": ").append(grid.length)
-                .append(",\n  \"columns\": ").append(grid[0].length)
-                .append(",\n  \"seed\": ").append(puzzle.seed())
-                .append(",\n  \"coordinateBase\": 0,\n  \"grid\": [\n");
+            .append(",\n  \"columns\": ").append(grid[0].length)
+            .append(",\n  \"seed\": ").append(puzzle.seed())
+            .append(",\n  \"coordinateBase\": 0,\n  \"grid\": [\n");
         for (int row = 0; row < grid.length; row++) {
-            out.append("    ").append(quote(new String(grid[row])));
+            out.append("    ").append(ekranirovat(new String(grid[row])));
             out.append(row + 1 < grid.length ? ",\n" : "\n");
         }
         out.append("  ],\n  \"words\": [\n");
         for (int i = 0; i < puzzle.placements().size(); i++) {
             WordSearchGenerator.Placement word = puzzle.placements().get(i);
             int last = word.word().length() - 1;
-            out.append("    {\"text\": ").append(quote(word.word()))
-                    .append(", \"row\": ").append(word.row())
-                    .append(", \"col\": ").append(word.col())
-                    .append(", \"dr\": ").append(word.dr())
-                    .append(", \"dc\": ").append(word.dc())
-                    .append(", \"endRow\": ").append(word.row() + word.dr() * last)
-                    .append(", \"endCol\": ").append(word.col() + word.dc() * last).append('}');
+            out.append("    {\"text\": ").append(ekranirovat(word.word()))
+                .append(", \"row\": ").append(word.row())
+                .append(", \"col\": ").append(word.col())
+                .append(", \"dr\": ").append(word.dr())
+                .append(", \"dc\": ").append(word.dc())
+                .append(", \"endRow\": ").append(word.row() + word.dr() * last)
+                .append(", \"endCol\": ").append(word.col() + word.dc() * last).append('}');
             out.append(i + 1 < puzzle.placements().size() ? ",\n" : "\n");
         }
         return out.append("  ]\n}\n").toString();
     }
 
-    private static String quote(String value) {
+    private static String ekranirovat(String value) {
         StringBuilder escaped = new StringBuilder("\"");
         for (char c : value.toCharArray()) {
             switch (c) {
@@ -184,7 +171,8 @@ public final class Main {
         return escaped.append('"').toString();
     }
 
-    private static String toHtml(WordSearchGenerator.Puzzle puzzle, String json) {
+    private static String v_forme_html(WordSearchGenerator.Puzzle puzzle, String json) {
+        // Тот же HTML-шаблон, что и раньше (без изменений в разметке).
         String template = """
                 <!doctype html>
                 <html lang="ru">
@@ -291,9 +279,9 @@ public final class Main {
                 </html>
                 """;
         return template.replace("{{ROWS}}", Integer.toString(puzzle.grid().length))
-                .replace("{{COLS}}", Integer.toString(puzzle.grid()[0].length))
-                .replace("{{COUNT}}", Integer.toString(puzzle.placements().size()))
-                .replace("{{SEED}}", Long.toString(puzzle.seed()))
-                .replace("{{JSON}}", json.replace("<", "\\u003c"));
+            .replace("{{COLS}}", Integer.toString(puzzle.grid()[0].length))
+            .replace("{{COUNT}}", Integer.toString(puzzle.placements().size()))
+            .replace("{{SEED}}", Long.toString(puzzle.seed()))
+            .replace("{{JSON}}", json.replace("<", "\\u003c"));
     }
 }
