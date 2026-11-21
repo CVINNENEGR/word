@@ -1,0 +1,61 @@
+Words variant 5 — independent verification
+
+Test source: tests/GeneratorTest.java
+Production source tested: src/WordSearchGenerator.java
+Runtime: OpenJDK 21.0.13
+Compilation target: Java 17 source and class-file format
+
+Compile command:
+java com.sun.tools.javac.Main -source 17 -target 17 -Xlint:-options -encoding UTF-8 -d tmp/test-classes src/WordSearchGenerator.java tests/GeneratorTest.java
+Compile result: exit code 0, no diagnostics.
+
+Environment limitation: --release 17 was initially attempted and returned
+"release version 17 not supported" because the runtime installation lacks
+the historical API signatures. The successful command verifies Java 17
+language and bytecode compatibility; execution was on Java 21, not Java 17.
+
+Run command:
+java -cp tmp/test-classes GeneratorTest
+Run result: exit code 0.
+
+Exact output:
+OK: PDF dictionary on 10x10
+OK: PDF dictionary on 11x10
+OK: PDF dictionary on 10x11
+OK: PDF dictionary on 12x10
+OK: PDF dictionary on 10x12
+OK: Seed reproducibility
+OK: NFC, Ё, palindrome, and shared subword
+OK: Word length boundary and direction
+OK: Invalid inputs rejected
+OK: Public validator detects damaged grid
+PASS: 10 scenarios, 2628 assertions
+
+Verification details:
+- Each of the five allowed dimensions is tested using all 11 words from the PDF.
+- Grid dimensions, uppercase Russian alphabet (including Ё), seed retention,
+  complete normalized word set, placement uniqueness, straight directions,
+  bounds, letters at metadata coordinates, and all three orientation classes
+  are checked for each valid generated puzzle.
+- A separately implemented exhaustive eight-direction scanner checks every
+  word appears exactly once in the completed grid. It canonicalizes the
+  physical cell path to count a palindrome only once. It does not call the
+  generator's findOccurrences implementation.
+- Identical seed reproduces both grid and ordered placement metadata.
+- Special fixture combines decomposed ё, ТОПОТ, and КОТ inside КОТИК.
+- ЭЛЕКТРОПОЕЗД has 12 letters, fits horizontally in 10x12, and is rejected in
+  10x10.
+- Rejection checks cover fewer than 10 words, case-normalized duplicates,
+  NFC-normalized duplicates, unsupported 11x11 dimensions, zero dimensions,
+  and Latin letters.
+- Public validate rejects a board deliberately changed at a placed letter.
+
+Scope: fixed contract cases only; no exhaustive or stress testing claimed.
+
+Additional checks
+- Main compiled and generated the 10x10 seed42 example.
+- A nine-word input was rejected with exit code1 before writing output.
+- Generated JavaScript passed node --check (syntax only).
+- PNG exports were generated directly by Java AWT/ImageIO.
+- Interactive HTML browser verification was blocked by the environment; no successful browser check is claimed.
+- Actual browser screenshots remain a manual submission step.

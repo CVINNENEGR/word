@@ -1,0 +1,31 @@
+{
+  "rows": 10,
+  "columns": 10,
+  "seed": 42,
+  "coordinateBase": 0,
+  "grid": [
+    "АЧЬЬОФГЙУЙ",
+    "ПОВОЛСЯОПЭ",
+    "ЯРОТКЕРИДХ",
+    "ЛЧРЙУОТЬОЧ",
+    "ШАБЮХЪВИЖМ",
+    "МТЙПНХЪЕЧШ",
+    "ЗЦТХЯМНЙРУ",
+    "ФЁЧНААНПЛК",
+    "ЧФГКЁЙБЗУЖ",
+    "ТПЭРЗЁЯВЩЯ"
+  ],
+  "words": [
+    {"text": "МАЙ", "row": 6, "col": 5, "dr": 1, "dc": 0, "endRow": 8, "endCol": 5},
+    {"text": "ЖЕНА", "row": 4, "col": 8, "dr": 1, "dc": -1, "endRow": 7, "endCol": 5},
+    {"text": "ШЛЯПА", "row": 4, "col": 0, "dr": -1, "dc": 0, "endRow": 0, "endCol": 0},
+    {"text": "ПОЯС", "row": 1, "col": 8, "dr": 0, "dc": -1, "endRow": 1, "endCol": 5},
+    {"text": "КУХНЯ", "row": 2, "col": 4, "dr": 1, "dc": 0, "endRow": 6, "endCol": 4},
+    {"text": "КОВЕР", "row": 2, "col": 4, "dr": 1, "dc": 1, "endRow": 6, "endCol": 8},
+    {"text": "БРОВЬ", "row": 4, "col": 2, "dr": -1, "dc": 0, "endRow": 0, "endCol": 2},
+    {"text": "ДИРЕКТОР", "row": 2, "col": 8, "dr": 0, "dc": -1, "endRow": 2, "endCol": 1},
+    {"text": "СЛОВО", "row": 1, "col": 5, "dr": 0, "dc": -1, "endRow": 1, "endCol": 1},
+    {"text": "МАРТ", "row": 5, "col": 0, "dr": -1, "dc": 1, "endRow": 2, "endCol": 3},
+    {"text": "УЧИТЕЛЬ", "row": 6, "col": 9, "dr": -1, "dc": -1, "endRow": 0, "endCol": 3}
+  ]
+}

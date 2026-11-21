@@ -1,0 +1,12 @@
+# One Russian word per line. Example from assignment 5.
+май
+жена
+шляпа
+пояс
+кухня
+ковер
+бровь
+директор
+слово
+март
+учитель
