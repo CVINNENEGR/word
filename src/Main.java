@@ -1,54 +1,50 @@
 import java.io.IOException;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * Точка входа и экспорт результатов в TXT/JSON/HTML/PNG.
- *
- * <p>Задача класса — связать ввод-вывод с алгоритмом и отрисовкой, не
- * смешивая их. Вся логика генерации и проверки живёт в
- * {@link WordSearchGenerator}, вся графика — в {@link PuzzleRenderer}.
- * Здесь только: разбор аргументов, чтение слов, вызов алгоритма, запись
- * четырёх файлов (TXT, JSON, HTML, два PNG) и печать отчёта в консоль.
- *
- * <p>JSON и HTML собираются вручную, без Gson/Jackson, потому что:
- * <ul>
- *   <li>задание разрешает Gson, но не требует; отказ от зависимости
- *       упрощает сборку — достаточно JDK;</li>
- *   <li>структура вывода фиксирована и небольшая, ручная сборка читается
- *       не хуже шаблонизатора;</li>
- *   <li>HTML должен быть самодостаточным (один файл), а не набором
- *       ресурсов, поэтому шаблон встроен в код.</li>
- * </ul>
- */
 public final class Main {
-    /** Разобранные аргументы командной строки. */
     private record Options(int rows, int cols, long seed, Path words, Path output) {}
 
     public static void main(String[] args) {
+        // Принудительно устанавливаем кодировку UTF-8 для вывода
+        System.setOut(new PrintStream(System.out, true, StandardCharsets.UTF_8));
+        System.setErr(new PrintStream(System.err, true, StandardCharsets.UTF_8));
+
         try {
             Options options = razobrat_argumenty(args);
-            if (options == null) return; // --help уже напечатан
+            if (options == null) return;
 
-            List<String> words = prochitat_slova(options.words());
+            // Читаем ВСЕ слова из файла
+            List<String> allWords = prochitat_slova(options.words());
+            
+            // Проверяем, что слов достаточно
+            if (allWords.size() < 11) {
+                throw new IllegalArgumentException("В файле должно быть минимум 11 слов для выбора. Найдено: " + allWords.size());
+            }
+
+            // Перемешиваем и берем случайные 11 слов
+            List<String> selectedWords = new ArrayList<>(allWords);
+            Collections.shuffle(selectedWords); // Перемешиваем
+            selectedWords = selectedWords.subList(0, 11); // Берем первые 11
+
+            System.out.println("Выбраны следующие слова: " + selectedWords);
+
+            // Передаем выбранные слова в генератор
             WordSearchGenerator.Puzzle puzzle = WordSearchGenerator.glavniy_algoritm(
-                options.rows(), options.cols(), words, options.seed());
-            // Повторная проверка после генерации: алгоритм уже следит за
-            // уникальностью, но независимый проход по готовым буквам ловит
-            // ошибки инкрементального учёта. Стоит дёшево, спасает от
-            // «доверяй, но проверяй».
+                    options.rows(), options.cols(), selectedWords, options.seed());
+            
             WordSearchGenerator.proverka_correctnosti(puzzle);
 
             Files.createDirectories(options.output());
             String text = v_forme_texta(puzzle);
             String json = v_forme_json(puzzle);
-            // Порядок записи не важен, но TXT печатается в консоль после
-            // записи — так при ошибке записи пользователь не увидит отчёт,
-            // который на самом деле не сохранён.
+            
             Files.writeString(options.output().resolve("puzzle.txt"), text, StandardCharsets.UTF_8);
             Files.writeString(options.output().resolve("puzzle.json"), json, StandardCharsets.UTF_8);
             Files.writeString(options.output().resolve("puzzle.html"), v_forme_html(puzzle, json), StandardCharsets.UTF_8);
@@ -58,23 +54,11 @@ public final class Main {
             System.out.println("Файлы сохранены в: " + options.output().toAbsolutePath().normalize());
             System.out.println("Откройте puzzle.html, чтобы показать или скрыть решение.");
         } catch (IllegalArgumentException | IllegalStateException | IOException e) {
-            // Все ожидаемые ошибки (плохой вход, исчерпан бюджет, проблемы ФС)
-            // приводятся к одному формату и коду возврата 1. Стектрейс не
-            // печатаем: для пользователя это шум, а для отладки есть тесты.
             System.err.println("Ошибка: " + e.getMessage());
             System.exit(1);
         }
     }
 
-    /**
-     * Разбор флагов. Возвращает {@code null}, если запрошена справка —
-     * это сигнал main'у выйти без запуска генерации. Так справка работает
-     * даже без остальных аргументов и без чтения файлов.
-     *
-     * <p>Парсер ручной, потому что флагов всего четыре и они простые;
-     * библиотека была бы избыточной. Зато ручной парсер даёт понятные
-     * сообщения об ошибках на русском.
-     */
     private static Options razobrat_argumenty(String[] args) {
         int rows = 10, cols = 10;
         long seed = 42;
@@ -86,18 +70,12 @@ public final class Main {
             if (!List.of("--size", "--seed", "--words", "--out").contains(flag)) {
                 throw new IllegalArgumentException("Неизвестный параметр: " + flag + ". Справка: --help");
             }
-            // ++i переходит к значению; если значения нет — понятная ошибка,
-            // а не ArrayIndexOutOfBounds.
             if (++i >= args.length) throw new IllegalArgumentException("Нет значения после " + flag);
             String value = args[i];
             switch (flag) {
                 case "--size" -> {
-                    // Принимаем три разделителя: латинский x, русскую х и знак ×.
-                    // Пользователь копирует размер из задания, где может быть
-                    // любой из них. toLowerCase(Locale.ROOT) — чтобы регистр
-                    // не зависел от локали.
-                    String[] parts = value.toLowerCase(Locale.ROOT).replace('х', 'x').replace('×', 'x').split("x", -1);
-                    if (parts.length != 2) throw new IllegalArgumentException("Размер задаётся как строки x столбцы, например 10x12.");
+                    String[] parts = value.toLowerCase(Locale.ROOT).replace('х', 'x').replace('?', 'x').split("x", -1);
+                    if (parts.length != 2) throw new IllegalArgumentException("Размер задается как строки x столбцы, например 10x12.");
                     try { rows = Integer.parseInt(parts[0]); cols = Integer.parseInt(parts[1]); }
                     catch (NumberFormatException e) { throw new IllegalArgumentException("Размер должен содержать два целых числа, например 10x12."); }
                 }
@@ -107,24 +85,12 @@ public final class Main {
                 }
                 case "--words" -> words = Path.of(value);
                 case "--out" -> output = Path.of(value);
-                // default недостижим из-за проверки выше, но компилятор требует
-                // ветку; AssertionError громко падает, если белый список и
-                // switch когда-нибудь разойдутся.
                 default -> throw new AssertionError("Unreachable option");
             }
         }
         return new Options(rows, cols, seed, words, output);
     }
 
-    /**
-     * Читает UTF-8 файл и возвращает «сырые» строки. Нормализация
-     * (NFC, uppercase, проверка алфавита) — уже в WordSearchGenerator:
-     * Main не должен знать правил игры, его дело — доставить строки.
-     *
-     * <p>BOM снимается только с первой строки: Files.readAllLines сохраняет
-     * его как символ \uFEFF, и без снятия первое слово стало бы «\uFEFFмай»
-     * и не прошло проверку алфавита.
-     */
     private static List<String> prochitat_slova(Path path) throws IOException {
         List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
         List<String> words = new ArrayList<>();
@@ -132,48 +98,32 @@ public final class Main {
             String line = lines.get(i);
             if (i == 0 && line.startsWith("\uFEFF")) line = line.substring(1);
             line = line.strip();
-            // Комментарии и пустые строки пропускаем: это позволяет держать
-            // в одном файле и слова, и заметки к ним.
+            // Пропускаем пустые строки и комментарии
             if (!line.isEmpty() && !line.startsWith("#")) words.add(line);
         }
         return words;
     }
 
-    /** Печатает справку. Дублирует README — при изменении флагов править в двух местах. */
     private static void pechatat_spravku() {
         System.out.println("""
                 Words — вариант 5. Генератор поиска слов в буквенной сетке.
-
                 java -cp build Main [параметры]
                   --size 10x10       Строки x столбцы. Также 11x10, 10x11, 12x10, 10x12.
                   --seed 42          Начальное значение генератора случайных чисел.
-                  --words words.txt  UTF-8: одно русское слово на строку, минимум 10 разных.
+                  --words words.txt  UTF-8: одно русское слово на строку (минимум 11).
                   --out output       Папка для TXT, JSON, HTML и двух PNG-изображений.
                   --help             Эта справка.
-
-                Значения в примере — значения по умолчанию. Координаты в консоли с 1, в JSON с 0.
                 """);
     }
 
-    /**
-     * Текстовый отчёт: шапка, сетка, решение. Координаты 1-based, потому что
-     * это файл для чтения человеком; JSON рядом остаётся 0-based для программ.
-     *
-     * <p>String.format с Locale.ROOT — чтобы разделители чисел не зависели
-     * от локали пользователя (в некоторых локалях %d печатает пробелы
-     * в разрядах, что сломало бы координаты).
-     */
     private static String v_forme_texta(WordSearchGenerator.Puzzle puzzle) {
         char[][] grid = puzzle.grid();
         StringBuilder out = new StringBuilder();
         out.append("WORDS — ВАРИАНТ 5\n")
-            .append("Размер: ").append(grid.length).append(" x ").append(grid[0].length)
-            .append(" (строки x столбцы)\n")
-            .append("Seed: ").append(puzzle.seed()).append('\n')
-            .append("Размещено слов: ").append(puzzle.placements().size()).append("\n\n");
-        // Пробел-разделитель между буквами: без него сетка сливается в
-        // нечитаемую строку. Первая буква строки — без ведущего пробела,
-        // чтобы отступы выглядели ровно.
+                .append("Размер: ").append(grid.length).append(" x ").append(grid[0].length)
+                .append(" (строки x столбцы)\n")
+                .append("Seed: ").append(puzzle.seed()).append('\n')
+                .append("Размещено слов: ").append(puzzle.placements().size()).append("\n\n");
         for (char[] row : grid) {
             for (int col = 0; col < row.length; col++) { if (col > 0) out.append(' '); out.append(row[col]); }
             out.append('\n');
@@ -182,44 +132,29 @@ public final class Main {
         for (WordSearchGenerator.Placement word : puzzle.placements()) {
             int last = word.word().length() - 1;
             out.append(String.format(Locale.ROOT, "%s: (%d, %d) -> (%d, %d), %s%n",
-                word.word(), word.row() + 1, word.col() + 1,
-                word.row() + word.dr() * last + 1, word.col() + word.dc() * last + 1,
-                nazvanie_napravleniya(word.dr(), word.dc())));
+                    word.word(), word.row() + 1, word.col() + 1,
+                    word.row() + word.dr() * last + 1, word.col() + word.dc() * last + 1,
+                    nazvanie_napravleniya(word.dr(), word.dc())));
         }
-        // Эта строка — утверждение, а не проверка: реальная проверка была
-        // в proverka_correctnosti. Здесь она для читателя файла.
         out.append("\nПроверка: каждое слово встречается ровно один раз.\n");
         return out.toString();
     }
 
-    /** Человекочитаемое направление: сначала вертикаль, потом горизонталь. */
     private static String nazvanie_napravleniya(int dr, int dc) {
         if (dr == 0) return dc > 0 ? "вправо" : "влево";
         if (dc == 0) return dr > 0 ? "вниз" : "вверх";
         return (dr > 0 ? "вниз" : "вверх") + (dc > 0 ? "-вправо" : "-влево");
     }
 
-    /**
-     * JSON-экспорт. Координаты 0-based (coordinateBase: 0) — так удобнее
-     * потребителям (HTML-страница, внешние скрипты). endRow/endCol
-     * вычисляются здесь, а не хранятся в Placement: единственный источник
-     * истины — Placement, конец всегда выводится из него.
-     *
-     * <p>Сборка ручная: риск багов с запятыми есть, но структура маленькая
-     * и стабильная; при добавлении поля легко ошибиться — тогда поможет
-     * тест, который парсит JSON обратно.
-     */
     private static String v_forme_json(WordSearchGenerator.Puzzle puzzle) {
         char[][] grid = puzzle.grid();
         StringBuilder out = new StringBuilder();
         out.append("{\n  \"rows\": ").append(grid.length)
-            .append(",\n  \"columns\": ").append(grid[0].length)
-            .append(",\n  \"seed\": ").append(puzzle.seed())
-            .append(",\n  \"coordinateBase\": 0,\n  \"grid\": [\n");
+                .append(",\n  \"columns\": ").append(grid[0].length)
+                .append(",\n  \"seed\": ").append(puzzle.seed())
+                .append(",\n  \"coordinateBase\": 0,\n  \"grid\": [\n");
         for (int row = 0; row < grid.length; row++) {
             out.append("    ").append(ekranirovat(new String(grid[row])));
-            // Запятая после всех строк, кроме последней: классический паттерн
-            // для ручной сборки массивов.
             out.append(row + 1 < grid.length ? ",\n" : "\n");
         }
         out.append("  ],\n  \"words\": [\n");
@@ -227,25 +162,17 @@ public final class Main {
             WordSearchGenerator.Placement word = puzzle.placements().get(i);
             int last = word.word().length() - 1;
             out.append("    {\"text\": ").append(ekranirovat(word.word()))
-                .append(", \"row\": ").append(word.row())
-                .append(", \"col\": ").append(word.col())
-                .append(", \"dr\": ").append(word.dr())
-                .append(", \"dc\": ").append(word.dc())
-                .append(", \"endRow\": ").append(word.row() + word.dr() * last)
-                .append(", \"endCol\": ").append(word.col() + word.dc() * last).append('}');
+                    .append(", \"row\": ").append(word.row())
+                    .append(", \"col\": ").append(word.col())
+                    .append(", \"dr\": ").append(word.dr())
+                    .append(", \"dc\": ").append(word.dc())
+                    .append(", \"endRow\": ").append(word.row() + word.dr() * last)
+                    .append(", \"endCol\": ").append(word.col() + word.dc() * last).append('}');
             out.append(i + 1 < puzzle.placements().size() ? ",\n" : "\n");
         }
         return out.append("  ]\n}\n").toString();
     }
 
-    /**
-     * Экранирование JSON-строки. Покрывает кавычки, обратные слэши,
-     * переводы строк/табуляцию и управляющие символы (<32) через \uXXXX.
-     *
-     * <p>Не экранирует / — в JSON это не нужно (в отличие от JS-строк).
-     * Не трогает \u2028/\u2029 — для русских слов они не встречаются,
-     * а от </script> защищает v_forme_html отдельно.
-     */
     private static String ekranirovat(String value) {
         StringBuilder escaped = new StringBuilder("\"");
         for (char c : value.toCharArray()) {
@@ -256,9 +183,6 @@ public final class Main {
                 case '\r' -> escaped.append("\\r");
                 case '\t' -> escaped.append("\\t");
                 default -> {
-                    // Управляющие символы в JSON запрещены буквально —
-                    // только через \uXXXX. String.format с Locale.ROOT,
-                    // чтобы %04x не зависел от локали.
                     if (c < 32) escaped.append(String.format(Locale.ROOT, "\\u%04x", (int) c));
                     else escaped.append(c);
                 }
@@ -267,19 +191,7 @@ public final class Main {
         return escaped.append('"').toString();
     }
 
-    /**
-     * HTML-экспорт: самодостаточная страница с кнопками «Показать решение»
-     * и «Распечатать». Шаблон встроен в код (text block), подстановка —
-     * через replace плейсхолдеров.
-     *
-     * <p>Ключевая деталь безопасности: {@code json.replace("<", "\u003c")}.
-     * Без неё последовательность {@code </script>} внутри данных закрыла бы
-     * тег раньше времени, и остаток JSON попал бы в HTML как текст.
-     * В JSON-строке {@code \u003c} парсится браузером как {@code <},
-     * а HTML-парсер его не видит.
-     */
     private static String v_forme_html(WordSearchGenerator.Puzzle puzzle, String json) {
-        // Тот же HTML-шаблон, что и раньше (без изменений в разметке).
         String template = """
                 <!doctype html>
                 <html lang="ru">
@@ -326,7 +238,7 @@ public final class Main {
                 <body>
                 <main>
                   <header>
-                    <div class="eyebrow"><span>WORDS / ВАРИАНТ 05</span><span class="stamp">{{ROWS}} × {{COLS}}</span></div>
+                    <div class="eyebrow"><span>WORDS / ВАРИАНТ 05</span><span class="stamp">{{ROWS}} ? {{COLS}}</span></div>
                     <h1>Найди слова</h1>
                     <p class="intro">{{COUNT}} слов спрятаны по горизонтали, вертикали и диагонали. Читать можно в обе стороны.</p>
                   </header>
@@ -367,7 +279,7 @@ public final class Main {
                     wordButtons.forEach((button,i)=>{button.classList.toggle('selected',showAll||selected===i);button.setAttribute('aria-pressed',String(showAll||selected===i));});
                     toggle.textContent=showAll?'Скрыть решение':'Показать решение';toggle.setAttribute('aria-pressed',String(showAll));
                     if(showAll)status.textContent=`Показаны все ${puzzle.words.length} слов.`;
-                    else if(selected>=0){const w=puzzle.words[selected];status.textContent=`${w.text}: (${w.row+1}, ${w.col+1}) → (${w.endRow+1}, ${w.endCol+1})`;}
+                    else if(selected>=0){const w=puzzle.words[selected];status.textContent=`${w.text}: (${w.row+1}, ${w.col+1}) ? (${w.endRow+1}, ${w.endCol+1})`;}
                     else status.textContent='';
                   }
                   puzzle.words.forEach((w,i)=>{
@@ -385,14 +297,10 @@ public final class Main {
                 </body>
                 </html>
                 """;
-        // Подстановка через replace, а не String.format: фигурные скобки в CSS/JS
-        // сломали бы format. Плейсхолдеры {{...}} выбраны, чтобы не пересекаться
-        // с синтаксисом шаблонных строк JS.
         return template.replace("{{ROWS}}", Integer.toString(puzzle.grid().length))
-            .replace("{{COLS}}", Integer.toString(puzzle.grid()[0].length))
-            .replace("{{COUNT}}", Integer.toString(puzzle.placements().size()))
-            .replace("{{SEED}}", Long.toString(puzzle.seed()))
-            // Замена < на \u003c — защита от </script> внутри JSON.
-            .replace("{{JSON}}", json.replace("<", "\\u003c"));
+                .replace("{{COLS}}", Integer.toString(puzzle.grid()[0].length))
+                .replace("{{COUNT}}", Integer.toString(puzzle.placements().size()))
+                .replace("{{SEED}}", Long.toString(puzzle.seed()))
+                .replace("{{JSON}}", json.replace("<", "\\u003c"));
     }
 }
