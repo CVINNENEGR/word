@@ -9,24 +9,64 @@ import java.util.Locale;
 import java.util.Random;
 import java.util.Set;
 
-/** Генератор и независимая проверка русских «найди слова». */
+/**
+ * Генератор и независимая проверка русских «найди слова» (вариант 5).
+ *
+ * <p>Задача — разместить все заданные слова в прямоугольной сетке по горизонтали,
+ * вертикали или диагонали так, чтобы каждое слово встречалось в готовой сетке
+ * РОВНО ОДИН РАЗ. Оставшиеся клетки заполняются случайными русскими буквами.
+ *
+ * <p>Ключевая сложность: слово, размещённое намеренно, может случайно сложиться
+ * ещё раз — из-за пересечений с другими словами или из-за букв-заполнителей.
+ * Поэтому проверка уникальности ведётся не по списку размещений, а по готовым
+ * буквам сетки: {@link #proverka_correctnosti} заново сканирует поле и требует
+ * ровно одно физическое вхождение каждого слова.
+ *
+ * <p>Алгоритм — рандомизированный backtracking с инкрементальным учётом вхождений.
+ * Подробности — в комментариях к {@link Search}.
+ */
 public final class WordSearchGenerator {
+    /** Русский алфавит: 33 буквы. «Ё» — отдельная буква от «Е». */
     public static final String ALPHABET = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ";
 
+    /**
+     * Одно размещение слова: стартовая клетка и направление.
+     * Конец не хранится, а вычисляется как {@code row + (length-1)*dr}.
+     * Координаты 0-based; {@code dr}/{@code dc} ∈ {-1,0,1}, не оба нуля.
+     */
     public record Placement(String word, int row, int col, int dr, int dc) {}
+
+    /**
+     * Готовый результат. {@code grid} намеренно {@code char[][]} (мутабельный),
+     * чтобы не копировать сетку при передаче в рендерер; вызывающий код не должен
+     * её менять. {@code placements} — иммутабельный список, по одному на слово.
+     */
     public record Puzzle(char[][] grid, List<Placement> placements, long seed) {}
+
+    /** Нормализованный отрезок (min,max) по линейным индексам — для дедупликации палиндромов. */
     private record SegmentKey(long first, long last) {}
+
+    /** Связь «окно ↔ позиция буквы в слове»; хранится в byCell для инкрементальности. */
     private record Link(Window window, int position) {}
 
+    /** Все 8 направлений: 4 прямых + 4 диагональных. */
     private static final int[][] DIRECTIONS = {
         {0, 1}, {0, -1}, {1, 0}, {-1, 0},
         {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
     };
+
+    /** Биты ориентаций: используются как маска покрытия в Search.placeWords. */
     private static final int HORIZONTAL = 1;
     private static final int VERTICAL = 2;
     private static final int DIAGONAL = 4;
     private static final int ALL_DIRECTIONS = HORIZONTAL | VERTICAL | DIAGONAL;
+
+    /** Маска всех 33 букв в одном long: удобно для операций «запретить/разрешить». */
     private static final long ALL_LETTERS = (1L << ALPHABET.length()) - 1;
+
+    // Бюджеты поиска. Подобраны так, чтобы типичный учебный вход решался за доли
+    // секунды, но «злой» вход не подвешивал программу навсегда. Это НЕ доказательство
+    // невозможности: исчерпание бюджета означает лишь «не нашли за отведённое время».
     private static final int MAX_ATTEMPTS = 16;
     private static final int MAX_SEARCH_STEPS = 200_000;
     private static final int PLACEMENT_STEPS_PER_ATTEMPT = 12_000;
@@ -34,10 +74,19 @@ public final class WordSearchGenerator {
 
     private WordSearchGenerator() {}
 
-    /** Главный алгоритм: слова -> валидный пазл. */
+    /**
+     * Главный алгоритм: принимает слова, размер и seed, возвращает валидный пазл
+     * или бросает исключение. Никогда не возвращает «частичный» результат.
+     *
+     * <p>Нормализация и дедупликация выполняются до поиска: так все последующие
+     * структуры работают с уже каноническими словами, а ошибки входа видны сразу.
+     */
     public static Puzzle glavniy_algoritm(int rows, int cols, List<String> rawWords, long seed) {
         proverka_razmera(rows, cols);
         if (rawWords == null) throw new IllegalArgumentException("Не задан список слов.");
+
+        // LinkedHashSet, а не HashSet: порядок слов влияет на воспроизводимость
+        // результата при том же seed, поэтому его нельзя терять.
         List<String> words = new ArrayList<>();
         Set<String> distinct = new LinkedHashSet<>();
         for (String rawWord : rawWords) {
@@ -53,12 +102,19 @@ public final class WordSearchGenerator {
         }
         if (words.size() < 10) throw new IllegalArgumentException("Нужно минимум 10 различных слов.");
 
+        // Бюджет общий на все попытки: если первая попытка съела всё, вторая
+        // не начнётся. Это защита от «перебора ради перебора».
         Budget budget = new Budget(MAX_SEARCH_STEPS);
         for (int attempt = 0; attempt < MAX_ATTEMPTS && budget.remaining > 0; attempt++) {
+            // SplitMix64 перемешивает seed + номер попытки, чтобы Random(42),
+            // Random(43), ... не давали коррелированные последовательности.
             long attemptSeed = mix64(seed + 0x9E3779B97F4A7C15L * attempt);
             Search search = new Search(rows, cols, words, new Random(attemptSeed), budget);
             if (search.placeWords()) {
                 Puzzle puzzle = search.result(seed);
+                // Двойная проверка: Search уже следит за уникальностью, но
+                // независимый проход по готовым буквам ловит ошибки инкрементального
+                // учёта. Это цена за надёжность, на 12×10 она незаметна.
                 proverka_correctnosti(puzzle);
                 return puzzle;
             }
@@ -68,13 +124,20 @@ public final class WordSearchGenerator {
             + "Попробуйте другой seed, размер поля или набор слов.");
     }
 
-    /** Независимая проверка готового пазла. */
+    /**
+     * Независимая проверка готового пазла. Не доверяет метаданным placements:
+     * заново сканирует буквы сетки и требует ровно одно физическое вхождение
+     * каждого слова. Именно этот метод делает результат доказуемо корректным.
+     */
     public static void proverka_correctnosti(Puzzle puzzle) {
         if (puzzle == null) throw new IllegalArgumentException("Поле не задано.");
         char[][] grid = puzzle.grid();
         int cols = proverka_formy_setki(grid);
         int rows = grid.length;
         proverka_razmera(rows, cols);
+
+        // 1. Все клетки — заглавные русские буквы. Пустая клетка (0) недопустима
+        //    в готовом пазле: значит, заполнение где-то не завершилось.
         for (int row = 0; row < rows; row++) {
             for (int col = 0; col < cols; col++) {
                 if (ALPHABET.indexOf(grid[row][col]) < 0) {
@@ -82,15 +145,19 @@ public final class WordSearchGenerator {
                 }
             }
         }
+
         List<Placement> placements = puzzle.placements();
         if (placements == null || placements.size() < 10) {
             throw new IllegalArgumentException("В решении должно быть минимум 10 различных слов.");
         }
+
         Set<String> words = new HashSet<>();
         int directions = 0;
         for (Placement placement : placements) {
             if (placement == null) throw new IllegalArgumentException("Решение содержит пустое размещение.");
             String word = normalizovat_slovo(placement.word());
+            // Слово в placements должно быть уже нормализовано: иначе сравнение
+            // с буквами сетки может «случайно» совпасть в другом регистре.
             if (!word.equals(placement.word())) {
                 throw new IllegalArgumentException("Слово в решении не нормализовано: «" + word + "».");
             }
@@ -114,28 +181,42 @@ public final class WordSearchGenerator {
                     throw new IllegalArgumentException("Буквы поля не совпадают с размещением слова «" + word + "».");
                 }
             }
+            // Ключевая проверка: физических вхождений ровно одно. Если слово
+            // случайно сложилось ещё раз — пазл невалиден, даже если «задумано»
+            // было только одно размещение.
             List<Placement> occurrences = naiti_vhozhdeniya(grid, word);
             if (occurrences.size() != 1) {
                 throw new IllegalArgumentException(
                     "Слово «" + word + "» встречается " + occurrences.size()
                     + " раз; требуется ровно одно физическое вхождение.");
             }
+            // Сверяем координаты в метаданных с найденным вхождением: иначе
+            // рендерер нарисует подсветку не там, где реально лежит слово.
             if (!segmentKey(placement, cols).equals(segmentKey(occurrences.get(0), cols))) {
                 throw new IllegalArgumentException("Координаты слова «" + word + "» неверны.");
             }
             directions |= directionKind(dr, dc);
         }
+        // Требование «все три ориентации» — дополнительное условие проекта,
+        // которого нет в задании, но оно делает пазл разнообразнее.
         if (directions != ALL_DIRECTIONS) {
             throw new IllegalArgumentException("Нужны горизонтальное, вертикальное и диагональное размещения.");
         }
     }
 
-    /** Поиск всех физических вхождений слова в сетке. */
+    /**
+     * Поиск всех физических вхождений слова в сетке по 8 направлениям.
+     * Пустая клетка (0) не совпадает ни с чем. Палиндром, прочитанный в обе
+     * стороны по одному отрезку, считается ОДНИМ вхождением (дедуп через
+     * SegmentKey). Этот метод — единая точка правды «что такое вхождение»:
+     * им пользуются и validate, и тесты.
+     */
     public static List<Placement> naiti_vhozhdeniya(char[][] grid, String rawWord) {
         int cols = proverka_formy_setki(grid);
         int rows = grid.length;
         String word = normalizovat_slovo(rawWord);
         if (word.length() > Math.max(rows, cols)) return List.of();
+
         List<Placement> found = new ArrayList<>();
         Set<SegmentKey> seen = new HashSet<>();
         for (int row = 0; row < rows; row++) {
@@ -159,7 +240,12 @@ public final class WordSearchGenerator {
         return List.copyOf(found);
     }
 
-    /** Нормализация: NFC, верхний регистр, проверка алфавита и длины. */
+    /**
+     * Нормализация слова: NFC, верхний регистр, проверка длины и алфавита.
+     * Locale.ROOT — намеренно: в турецкой локали toUpperCase('i') даёт 'İ',
+     * что сломало бы сравнение с русскими буквами. NFC — чтобы составные
+     * символы (например, «й» = «и» + бревис) сравнивались одинаково.
+     */
     private static String normalizovat_slovo(String rawWord) {
         if (rawWord == null) throw new IllegalArgumentException("Список содержит пустое слово (null).");
         String word = Normalizer.normalize(rawWord.trim(), Normalizer.Form.NFC).toUpperCase(Locale.ROOT);
@@ -172,7 +258,7 @@ public final class WordSearchGenerator {
         return word;
     }
 
-    /** Разрешены только пять размеров из задания. */
+    /** Разрешены только пять размеров из задания (строки × столбцы). */
     private static void proverka_razmera(int rows, int cols) {
         if (!((rows == 10 && (cols == 10 || cols == 11 || cols == 12))
                 || (cols == 10 && (rows == 11 || rows == 12)))) {
@@ -203,6 +289,12 @@ public final class WordSearchGenerator {
         return dr == 0 ? HORIZONTAL : dc == 0 ? VERTICAL : DIAGONAL;
     }
 
+    /**
+     * Нормализует пару «начало-конец» в отрезок (min,max) по линейным индексам.
+     * Нужен, чтобы палиндром, прочитанный в обе стороны по одному отрезку,
+     * давал одинаковый ключ и не считался двумя вхождениями. long — чтобы
+     * не переполниться на больших сетках (перестраховка).
+     */
     private static SegmentKey segmentKey(Placement placement, int cols) {
         int distance = placement.word().length() - 1;
         long first = (long) placement.row() * cols + placement.col();
@@ -211,20 +303,26 @@ public final class WordSearchGenerator {
         return new SegmentKey(Math.min(first, last), Math.max(first, last));
     }
 
+    /** SplitMix64: быстрый микшер для получения некоррелированных seed'ов попыток. */
     private static long mix64(long value) {
         value = (value ^ (value >>> 30)) * 0xBF58476D1CE4E5B9L;
         value = (value ^ (value >>> 27)) * 0x94D049BB133111EBL;
         return value ^ (value >>> 31);
     }
 
-    /** Общий бюджет поиска на все попытки. */
+    /** Общий бюджет шагов поиска на все попытки. */
     private static final class Budget {
         private int remaining;
         Budget(int remaining) { this.remaining = remaining; }
         boolean take() { if (remaining <= 0) return false; remaining--; return true; }
     }
 
-    /** Мутабельное окно с инкрементальными счётчиками. */
+    /**
+     * Ориентированное потенциальное вхождение слова.
+     * Мутабельное: empty/mismatches обновляются инкрементально в setCell/clearCell.
+     * complete() — про ДАННОЕ окно, а не про слово в целом; сколько раз слово
+     * сложилось, отслеживает Search.occurrenceCounts.
+     */
     private static final class Window {
         final int wordIndex; final String word; final Placement placement;
         final int[] cells; int empty; int mismatches;
@@ -235,7 +333,18 @@ public final class WordSearchGenerator {
         boolean complete() { return empty == 0 && mismatches == 0; }
     }
 
-    /** Рандомизированный backtracking с инкрементальным учётом вхождений. */
+    /**
+     * Рандомизированный backtracking с инкрементальным учётом вхождений.
+     *
+     * <p>Идея: заранее перечислить все возможные «окна» каждого слова (позиция ×
+     * направление) и поддерживать для каждого окна счётчики empty/mismatches.
+     * При изменении клетки обновляются только окна, проходящие через неё
+     * (byCell), а не все окна — это и даёт приемлемую скорость.
+     *
+     * <p>Размещение слов и заполнение пустых клеток — две отдельные фазы:
+     * сначала нужно, чтобы каждое слово имело ровно одно вхождение, потом
+     * заполнить остаток так, чтобы не появилось второе.
+     */
     private static final class Search {
         private final int rows, cols;
         private final List<String> words;
@@ -259,10 +368,13 @@ public final class WordSearchGenerator {
             this.occurrenceCounts = new int[words.size()];
             for (int cell = 0; cell < grid.length; cell++) { byCell.add(new ArrayList<>()); fillOrder.add(cell); }
             Collections.shuffle(fillOrder, random);
+
             for (int wordIndex = 0; wordIndex < words.size(); wordIndex++) {
                 String word = words.get(wordIndex);
                 List<Window> wordWindows = new ArrayList<>();
                 byWord.add(wordWindows);
+                // Для палиндрома прямое и обратное направления по одному отрезку —
+                // это одно физическое вхождение. Достаточно одного окна.
                 boolean palindrome = word.equals(new StringBuilder(word).reverse().toString());
                 for (int row = 0; row < rows; row++) {
                     for (int col = 0; col < cols; col++) {
@@ -283,7 +395,18 @@ public final class WordSearchGenerator {
             }
         }
 
-        /** Размещение слов: выбор самого длинного, приоритет новых ориентаций, откат. */
+        /**
+         * Фаза размещения слов. Эвристики:
+         * <ol>
+         *   <li>Выбираем САМОЕ ДЛИННОЕ неразмещённое слово: у него меньше
+         *       допустимых окон, и тупик обнаружится раньше.</li>
+         *   <li>Кандидатов сортируем: сначала новые ориентации (чтобы покрыть
+         *       горизонталь/вертикаль/диагональ), потом те, что переиспользуют
+         *       больше уже стоящих букв (меньше пустых клеток — меньше ветвление).</li>
+         *   <li>Отсечение: если ориентаций не хватает, а слов осталось меньше,
+         *       чем нужно, — ветка тупиковая, не тратим на неё шаги.</li>
+         * </ol>
+         */
         boolean placeWords() {
             if (exhausted || duplicatedWords != 0) return false;
             int chosenWord = -1, unmatched = 0, coverage = 0;
@@ -296,6 +419,8 @@ public final class WordSearchGenerator {
                     if (chosenWord < 0 || words.get(i).length() > words.get(chosenWord).length()) chosenWord = i;
                 }
             }
+            // Если осталось меньше слов, чем недостающих ориентаций, — точно не
+            // покроем все три. Эвристика корректна: одно слово даёт одну ориентацию.
             if (Integer.bitCount(ALL_DIRECTIONS & ~coverage) > unmatched) return false;
             if (chosenWord < 0) return coverage == ALL_DIRECTIONS && fillEmptyCells();
 
@@ -310,6 +435,9 @@ public final class WordSearchGenerator {
 
             for (Window candidate : candidates) {
                 if (!takePlacementStep()) return false;
+                // changed[] — только клетки, которые были пусты. Занятые клетки
+                // не трогаем: их буквы принадлежат другим словам, и откат не должен
+                // их стирать.
                 int[] changed = new int[candidate.cells.length];
                 int changedCount = 0;
                 for (int i = 0; i < candidate.cells.length; i++) {
@@ -317,6 +445,8 @@ public final class WordSearchGenerator {
                     if (grid[cell] == 0) {
                         changed[changedCount++] = cell;
                         setCell(cell, candidate.word.charAt(i));
+                        // Как только слово сложилось дважды — эта ветка мертва,
+                        // дальше ставить буквы бессмысленно.
                         if (duplicatedWords != 0) break;
                     }
                 }
@@ -327,7 +457,13 @@ public final class WordSearchGenerator {
             return false;
         }
 
-        /** Заполнение пустых клеток: запрет завершающих букв + MRV. */
+        /**
+         * Фаза заполнения пустых клеток. Ключевая идея: если какое-то окно уже
+         * почти сложилось (mismatches==0, empty==1), то буква, которая его
+         * завершит, ЗАПРЕЩЕНА в этой клетке — иначе получится дубликат.
+         * Из оставшихся клеток выбираем с наименьшим доменом (MRV): меньше
+         * вариантов — раньше обнаружим тупик.
+         */
         private boolean fillEmptyCells() {
             if (exhausted || duplicatedWords != 0) return false;
             long[] forbidden = new long[grid.length];
@@ -346,10 +482,10 @@ public final class WordSearchGenerator {
             for (int cell : fillOrder) {
                 if (grid[cell] != 0) continue;
                 int domainSize = ALPHABET.length() - Long.bitCount(forbidden[cell]);
-                if (domainSize == 0) return false;
+                if (domainSize == 0) return false; // все буквы запрещены — тупик
                 if (domainSize < smallestDomain) { smallestDomain = domainSize; chosenCell = cell; }
             }
-            if (chosenCell < 0) return true;
+            if (chosenCell < 0) return true; // всё заполнено
             long allowed = ALL_LETTERS & ~forbidden[chosenCell];
             List<Character> letters = new ArrayList<>();
             for (int i = 0; i < ALPHABET.length(); i++) if ((allowed & (1L << i)) != 0) letters.add(ALPHABET.charAt(i));
@@ -364,7 +500,12 @@ public final class WordSearchGenerator {
             return false;
         }
 
-        /** Поставить букву и обновить окна, проходящие через клетку. */
+        /**
+         * Поставить букву и обновить ТОЛЬКО окна, проходящие через клетку.
+         * occurrenceCounts инкрементируется всегда, а duplicatedWords — только
+         * при переходе 1→2: нам важно знать, у скольких СЛОВ есть дубликат,
+         * а не сколько всего лишних вхождений.
+         */
         private void setCell(int cell, char value) {
             grid[cell] = value;
             for (Link link : byCell.get(cell)) {
@@ -375,7 +516,11 @@ public final class WordSearchGenerator {
             }
         }
 
-        /** Откатить букву (симметрично setCell). */
+        /**
+         * Откат буквы — строго симметрично setCell. Любой рассинхрон здесь даёт
+         * «фантомные» дубликаты или пропущенные: классическое место для багов
+         * в инкрементальных алгоритмах.
+         */
         private void clearCell(int cell) {
             char value = grid[cell];
             for (Link link : byCell.get(cell)) {
@@ -387,6 +532,7 @@ public final class WordSearchGenerator {
             grid[cell] = 0;
         }
 
+        /** Единственное завершённое окно для слова; иначе — нарушен инвариант. */
         private Window singleOccurrence(int wordIndex) {
             for (Window window : byWord.get(wordIndex)) if (window.complete()) return window;
             throw new IllegalStateException("Внутренняя ошибка учёта вхождений.");
@@ -402,6 +548,7 @@ public final class WordSearchGenerator {
             return true;
         }
 
+        /** Сборка Puzzle: копия сетки в char[][], Placement для каждого слова. */
         Puzzle result(long seed) {
             char[][] resultGrid = new char[rows][cols];
             for (int row = 0; row < rows; row++) System.arraycopy(grid, row * cols, resultGrid[row], 0, cols);
